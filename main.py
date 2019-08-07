@@ -123,7 +123,7 @@ def handlerFuncPost(httpClient, httpResponse):
         Log.i("new sub espId : " + espid)
         if espid not in esp_subscribed:
             esp_subscribed.append(espid)
-            esp_messages[espid] = "Loading..."
+            esp_messages[espid] = espid;
         httpResponse.WriteResponseOk(
             headers=None,
             contentType="text/plain",
@@ -192,7 +192,7 @@ def handlerFuncGet(httpClient, httpResponse):
     )
 
 mws = MicroWebSrv() # TCP port 80 and files in /flash/www
-mws.Start()         # Starts server in a new
+mws.Start(threaded=True)         # Starts server in a new
 
 ############################################################################
 
