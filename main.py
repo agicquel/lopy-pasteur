@@ -46,6 +46,7 @@ def _callback(message):
     for m in parsed:
         mId = str(m.get("espId"))
         mMes = str(m.get("message"))
+        mName = str(m.get("name"))
         if mId and mMes :
             esp_messages[mId] = mMes
 
@@ -99,7 +100,7 @@ def send(message):
 
 
 ############################## Configure Wifi ##############################
-wlan = WLAN(mode=WLAN.AP, ssid=config.WIFI_SSID, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
+wlan = WLAN(mode=WLAN.AP, ssid=config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:], auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
 wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 ############################################################################
 
@@ -190,6 +191,44 @@ def handlerFuncGet(httpClient, httpResponse):
         contentCharset = "UTF-8",
         content = response
     )
+
+@MicroWebSrv.route('/displays', 'GET')
+def handlerFuncGetDisplays(httpClient, httpResponse):
+    response = "["
+    for espid, espmes in esp_messages.items():
+        response += '{"message": "' + espmes + '",'
+        response += '"name": "Afficheur-' + espid + '",'
+        response += '"espId": "' + espid + '"}'
+        response += ","
+    if(len(response) != 1):
+        response = response[:-1]
+    response += "]"
+    Log.i("response = " + response)
+    httpResponse.WriteResponseOk(
+        headers = None,
+        contentType = "application/json",
+        contentCharset = "UTF-8",
+        content = response
+    )
+
+@MicroWebSrv.route('/displays/<espid>', 'PUT')
+def handlerFuncPost(httpClient, httpResponse, routeArgs):
+    global esp_subscribed
+    global esp_messages
+    params  = httpClient.ReadRequestPostedFormData()
+    espid = routeArgs['espid']
+    message = params["message"]
+    if espid in esp_subscribed:
+        esp_messages[espid] = message;
+        httpResponse.WriteResponseOk(
+            headers=None,
+            contentType="text/plain",
+            contentCharset="UTF-8",
+            content="Message updated"
+        )
+    else:
+        httpResponse.WriteResponseForbidden()
+
 
 mws = MicroWebSrv() # TCP port 80 and files in /flash/www
 mws.Start(threaded=True)         # Starts server in a new

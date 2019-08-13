@@ -1,5 +1,5 @@
 # Wi-Fi configuration
-WIFI_SSID = 'LOPY'
+WIFI_SSID_PREFIX = 'Lopy_HP_'
 WIFI_PASS = 'lopylopy'
 
 # FTP configuration
