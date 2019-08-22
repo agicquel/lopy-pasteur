@@ -203,7 +203,7 @@ def handlerFuncGet(httpClient, httpResponse):
                         var cell = document.getElementById("message-" + espid).innerHTML = text;
                         updateLopy(espid, text);
                         var xhr = new XMLHttpRequest();
-                        var url = "http://"+espip+"/cm?user=admin&password=azerty&cmnd=Displaytext [zs2]"+text;
+                        var url = "http://"+espip+"/cm?user=admin&password=azerty&cmnd=Displaytext [z][s2]"+text;
                         xhr.open("GET", url, true);
                         xhr.withCredentials = true;
                         xhr.onreadystatechange = function () {
@@ -313,7 +313,7 @@ def th_reqEsp(delay, id):
             wCli = MicroWebCli("http://"+espip+"/cm")
             wCli.QueryParams['user'] = 'admin'
             wCli.QueryParams['password'] = 'azerty'
-            wCli.QueryParams['cmnd'] = 'Displaytext [zs2]' + esp_messages_displayed.get(espid)
+            wCli.QueryParams['cmnd'] = 'Displaytext [z][s2]' + esp_messages_displayed.get(espid)
             print('GET %s' % wCli.URL)
             try:
                 wCli.OpenRequest()
