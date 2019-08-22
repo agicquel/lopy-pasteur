@@ -6,12 +6,14 @@ from led import Led
 import machine
 import network
 import time
+import _thread
 import config
 import ujson
 import pycom
 from network import Server
 import ubinascii
 import socket
+from microWebCli import MicroWebCli
 
 Log.i("LoPy launched")
 Led.blink_red()
@@ -19,7 +21,8 @@ time.sleep(10)
 
 ############################ Configure ESP vars ############################
 esp_subscribed = []
-esp_messages = {}
+esp_messages_lora = {}
+esp_messages_displayed = {}
 esp_id_ip = {}
 ############################################################################
 
@@ -29,6 +32,7 @@ lora = LoRa(mode=LoRa.LORAWAN, region=LoRa.EU868)
 lopyMAC = ubinascii.hexlify(lora.mac()).upper().decode('utf-8')
 
 messageReceived = False
+lopy_connected = False
 
 socketLora = socket.socket(socket.AF_LORA, socket.SOCK_RAW)
 socketLora.setsockopt(socket.SOL_LORA, socket.SO_DR, 5)
@@ -51,7 +55,9 @@ def _callback(message):
         mMes = str(m.get("message"))
         mName = str(m.get("name"))
         if mId and mMes :
-            esp_messages[mId] = mMes
+            if((not mId in esp_messages_lora) or esp_messages_lora[mId] != mMes):
+                esp_messages_lora[mId] = mMes
+                esp_messages_displayed[mId] = mMes
 
 def _lora_callback(trigger):
     Log.i("_lora_callback")
@@ -74,12 +80,15 @@ def _lora_callback(trigger):
 lora.callback(trigger=(LoRa.RX_PACKET_EVENT | LoRa.TX_FAILED_EVENT), handler=_lora_callback)
 
 def _join():
+    global lopy_connected
     if not lora.has_joined():
         Log.i("Connecting Lora...")
+        lopy_connected = False
         Led.blink_yellow()
         lora.join(activation=LoRa.OTAA, auth=(app_eui, app_key), timeout=0)
         while not lora.has_joined():
-            time.sleep(2.5)
+            time.sleep(2.5)    
+        lopy_connected = True
         Led.blink_green()
         Log.i("Connected")
         
@@ -102,7 +111,8 @@ def send(message):
 
 
 ############################## Configure Wifi ##############################
-wlan = WLAN(mode=WLAN.AP, ssid=config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:], auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
+lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:]
+wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
 wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 ############################################################################
 
@@ -118,170 +128,137 @@ server.deinit() # disable
 
 @MicroWebSrv.route('/subscribe', 'POST')
 def handlerFuncPost(httpClient, httpResponse):
-        global esp_subscribed
-        global esp_messages
-        global esp_id_ip
-        params  = httpClient.GetRequestQueryParams()
-        if "espid" in params:
-            espid = params["espid"]
-            Log.i("new sub espId : " + espid)
-            if espid not in esp_subscribed:
-                esp_subscribed.append(espid)
-                esp_messages[espid] = espid
-                esp_id_ip[espid] = httpClient.GetIPAddr()
-            httpResponse.WriteResponseOk(
-                headers=None,
-                contentType="text/plain",
-                contentCharset="UTF-8",
-                content="Subscribed"
-            )
-        else:
-            httpResponse.WriteResponseForbidden()
+    global esp_subscribed
+    global esp_messages_lora
+    global esp_messages_displayed
+    global esp_id_ip
+    params  = httpClient.GetRequestQueryParams()
+    if "espid" in params:
+        espid = params["espid"]
+        Log.i("new sub espId : " + espid)
+        if espid not in esp_subscribed:
+            esp_subscribed.append(espid)
+            esp_messages_lora[espid] = espid
+            esp_messages_displayed[espid] = espid
+            esp_id_ip[espid] = httpClient.GetIPAddr()
+        httpResponse.WriteResponseOk(
+            headers=None,
+            contentType="text/plain",
+            contentCharset="UTF-8",
+            content="Subscribed"
+        )
+    else:
+        httpResponse.WriteResponseForbidden()
 
 @MicroWebSrv.route('/subscribed/<espid>')
 def handlerFuncSub(httpClient, httpResponse, routeArgs):
-        global esp_subscribed
-        espid = routeArgs['espid']
-        if espid in esp_subscribed:
-            httpResponse.WriteResponseOk()
-        else:
-            httpResponse.WriteResponseForbidden()
+    global esp_subscribed
+    espid = routeArgs['espid']
+    if espid in esp_subscribed:
+        httpResponse.WriteResponseOk()
+    else:
+        httpResponse.WriteResponseForbidden()
+
 
 @MicroWebSrv.route('/message/<espid>')
 def handlerFuncEdit(httpClient, httpResponse, routeArgs):
-        global esp_subscribed
-        global esp_messages
-        espid = routeArgs['espid']
-        if espid in esp_subscribed:
-            httpResponse.WriteResponseOk(
-                headers=None,
-                contentType="text/plain",
-                contentCharset="UTF-8",
-                content=esp_messages.get(espid)
-            )
-        else:
-            httpResponse.WriteResponseForbidden()
-
-@MicroWebSrv.route('/messages')
-def handlerFuncGet(httpClient, httpResponse):
-        response = """\
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <meta charset="UTF-8" />
-                <title>ESP MESSAGES</title>
-            </head>
-            <body>
-                <h3>LoPy : {mac_address}</h3>
-                <table border="1">
-                <tr>
-                    <th>ESP ID</th>
-                    <th>Message</th>
-                </tr>
-            """.format(mac_address = lopyMAC)
-        for espid, espmes in esp_messages.items():
-            response += "<tr>\n<td>" + espid + "</td>"
-            response += "\n<td>" + espmes + "</td>\n</tr>"
-        response += """\
-                        </tr>
-                        <tr>
-                    </table>
-                    <br>
-                    
-                    <iframe id="iframe3"
-                        title="iframe2"
-                        width="600"
-                        height="900"
-                        src="http://10.42.31.3/">
-                    </iframe>
-
-                </body>
-            </html>
-            """
+    global esp_subscribed
+    global esp_messages_displayed
+    espid = routeArgs['espid']
+    if espid in esp_subscribed:
         httpResponse.WriteResponseOk(
-            headers = None,
-            contentType = "text/html",
-            contentCharset = "UTF-8",
-            content = response
+            headers=None,
+            contentType="text/plain",
+            contentCharset="UTF-8",
+            content=esp_messages_displayed.get(espid)
         )
+    else:
+        httpResponse.WriteResponseForbidden()
 
 @MicroWebSrv.route('/')
-def handlerFuncIndex(httpClient, httpResponse):
-        response = """\
-                <!DOCTYPE html>
-                <html>
-                
-                    <head>
-                        <meta charset="UTF-8" />
-                        <title>LoPy Config</title>
-                    </head>
+def handlerFuncGet(httpClient, httpResponse):
+    response = """\
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="UTF-8" />
+            <title>ESP MESSAGES</title>
+            <script>
+                    function updateLopy(espid, message) {
+                        var data = "message=" + message;
+                        var xhr = new XMLHttpRequest();
 
-                    <style type="text/css">
-                        * {
-                            font-family: monospace;
-                            font-size: 18px;
+                        xhr.addEventListener("readystatechange", function () {
+                        if (this.readyState === 4) {
+                            console.log(this.responseText);
                         }
-                        body {
-                            
-                            padding: 0;
-                        }
-                        h1 {
-                            color: white;
-                            background-color: black;
-                            font-size: 30px;
-                        }
-                    </style>
+                        });
 
-                    <body>
-                        
-                        <h1>LoPy</h1>
-                        <status>
-                            <ul>
-                                <li>WiFi&nbsp&nbsp&nbsp : ok</li>
-                                <li>SSID&nbsp&nbsp&nbsp : LoPy</li>
-                                <li>Clients : skuu</li>
-                                <li>LoRa&nbsp&nbsp&nbsp : ok</li>
-                            </ul> 
-                        </status>
-            """
-        for espid, espip in esp_id_ip.items():
-            response += "<esp><p>"+espid+" : <input id=\""+espid+"\" type=\"text\"> <button onclick=\"sendText(\""+espid+"\",\""+espip+"\")\">Send</button></p></esp>"
-                        
-                        
-        response +="""\
-                    </body>
-                
-                    <script type="text/javascript">
-                        function sendText(espid, espip){
-                            var text = document.getElementById(espid).value;
-                            var xhr = new XMLHttpRequest();
-                            var url = "http://"+espip+"/cm?user=admin&password=azerty&cmnd=Displaytext [zs2]"+text;
-                            xhr.open("GET", url, true);
-                            xhr.setRequestHeader("Content-Type", "application/json");
-                            xhr.onreadystatechange = function () {
-                                if (xhr.readyState === 4 && xhr.status === 200) {
-                                    var json = JSON.parse(xhr.responseText);
-                                    console.log(json);
-                                }
-                            };
-                            xhr.send();
+                        xhr.open("PUT", "http://""" + config.API_HOST + """/displays/" + espid);
+                        xhr.withCredentials = true;
+                        xhr.send(data);
+                    }
+                    function sendText(espid, espip){
+                        var text = document.getElementById(espid).value;
+                        var cell = document.getElementById("message-" + espid).innerHTML = text;
+                        updateLopy(espid, text);
+                        var xhr = new XMLHttpRequest();
+                        var url = "http://"+espip+"/cm?user=admin&password=azerty&cmnd=Displaytext [zs2]"+text;
+                        xhr.open("GET", url, true);
+                        xhr.withCredentials = true;
+                        xhr.onreadystatechange = function () {
+                            if (xhr.readyState === 4 && xhr.status === 200) {
+                                var json = JSON.parse(xhr.responseText);
+                                console.log(json);
+                            }
                         };
-                    </script>
-                
-                </html>
-
-            """
-        httpResponse.WriteResponseOk(
-            headers = None,
-            contentType = "text/html",
-            contentCharset = "UTF-8",
-            content = response
-        )
+                        xhr.send();
+                    };
+                </script>
+        </head>
+        <body>
+            <h3>Page de configuration du LoPy</h3>
+            <br>
+            <ul>
+                <li>SSID&nbsp;&nbsp;&nbsp; : """ + lopy_ssid + """</li>
+                <li>MAC&nbsp;&nbsp;&nbsp; : """ + lopyMAC + """</li>
+                <li>LoRa&nbsp;&nbsp;&nbsp; : """ + ("Connecté" if lopy_connected else "Déconnecté") + """</li>
+            </ul> 
+            <br>
+            <table border="1">
+            <thead>
+                <tr>
+                    <th>ESP ID</th>
+                    <th>ESP IP</th>
+                    <th>Message</th>
+                    <th>Modification</th>
+                </tr>
+            </thead>
+            <tbody>
+        """
+    for espid, espip in esp_id_ip.items():
+        response += "<tr><td>" + espid + "</td>"
+        response += "<td><a href=\"http://" + espip + "\">" + espip + "</a></td>"
+        response += "<td id='message-" + espid + "'>" + esp_messages_displayed.get(espid) + "</td>"
+        response += "<td><input id=\""+espid+"\" type=\"text\"> <button onclick=\'sendText(\""+espid+"\",\""+espip+"\")\'>Send</button></td></tr>"
+    response += """\
+                </tbody>
+                </table>
+                <br>
+            </body>
+        </html>
+        """
+    httpResponse.WriteResponseOk(
+        headers = None,
+        contentType = "text/html",
+        contentCharset = "UTF-8",
+        content = response
+    )
 
 @MicroWebSrv.route('/displays', 'GET')
 def handlerFuncGetDisplays(httpClient, httpResponse):
     response = "["
-    for espid, espmes in esp_messages.items():
+    for espid, espmes in esp_messages_displayed.items():
         response += '{"message": "' + espmes + '",'
         response += '"name": "Afficheur-' + espid + '",'
         response += '"espId": "' + espid + '"}'
@@ -300,17 +277,18 @@ def handlerFuncGetDisplays(httpClient, httpResponse):
 @MicroWebSrv.route('/displays/<espid>', 'PUT')
 def handlerFuncPost(httpClient, httpResponse, routeArgs):
     global esp_subscribed
-    global esp_messages
+    global esp_messages_displayed
     params  = httpClient.ReadRequestPostedFormData()
     espid = routeArgs['espid']
     message = params["message"]
     if espid in esp_subscribed:
-        esp_messages[espid] = message;
+        esp_messages_displayed[espid] = message;
         httpResponse.WriteResponseOk(
             headers=None,
             contentType="text/plain",
             contentCharset="UTF-8",
-            content="Message updated"
+            content="Message updated",
+
         )
     else:
         httpResponse.WriteResponseForbidden()
@@ -323,14 +301,65 @@ mws.Start(threaded=True)         # Starts server in a new
 ############################################################################
 
 
+############################### ESP REQ LOOP ###############################
+def th_reqEsp(delay, id):
+    global esp_id_ip
+    global esp_subscribed
+    global esp_messages_lora
+    global esp_messages_displayed
+    while True:
+        for espid, espip in esp_id_ip.items():
+            Log.i("Envoie de la req pour espid = " + espid + ", ip = " + espip)
+            wCli = MicroWebCli("http://"+espip+"/cm")
+            wCli.QueryParams['user'] = 'admin'
+            wCli.QueryParams['password'] = 'azerty'
+            wCli.QueryParams['cmnd'] = 'Displaytext [zs2]' + esp_messages_displayed.get(espid)
+            print('GET %s' % wCli.URL)
+            try:
+                wCli.OpenRequest()
+                buf  = memoryview(bytearray(1024))
+                resp = wCli.GetResponse()
+                if resp.IsSuccess():
+                    while not resp.IsClosed():
+                        x = resp.ReadContentInto(buf)
+                        if x < len(buf):
+                            buf = buf[:x]
+                else:
+                    print('GET return %d code (%s)' % (resp.GetStatusCode(), resp.GetStatusMessage()))
+                    removeEsp(espid)
+            except:
+                removeEsp(espid)
+        time.sleep(delay)
+
+def removeEsp(espid):
+    esp_subscribed.remove(espid)
+    esp_messages_lora.pop(espid)
+    esp_messages_displayed.pop(espid)
+    esp_id_ip.pop(espid)
+############################################################################
+
+
 ################################ MAIN LOOP #################################
+
+# TEST
+#esp_subscribed.append('600194382C8C')
+#esp_subscribed.append('2C3AE83DE44E')
+#esp_subscribed.append('68C63A88B82B')
+
+_thread.start_new_thread(th_reqEsp, (60, 1337))
 _join()
 while True:
     time.sleep(5)
     request = {}
     request["esp_subscribed"] = esp_subscribed
+    request["esp_not_sync"] = []
+    for esp in esp_subscribed:
+        if((esp in esp_messages_lora and esp in esp_messages_displayed) and esp_messages_lora[esp] != esp_messages_displayed[esp]):
+            request["esp_not_sync"].append({"espid" : esp, "message" : esp_messages_displayed[esp]})
     encoded = ujson.dumps(request)
+    Log.i("esp_messages_lora = " + ujson.dumps(esp_messages_lora))
+    Log.i("esp_messages_displayed = " + ujson.dumps(esp_messages_displayed))
     send(encoded)
     Led.blink_green()
-    time.sleep(10)
+    time.sleep(20)
 ############################################################################
