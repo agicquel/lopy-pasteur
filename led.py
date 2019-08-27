@@ -9,7 +9,7 @@ class Led:
     @staticmethod
     def blink_yellow():
         pycom.heartbeat(False)
-        pycom.rgbled(0x7f7f00)
+        pycom.rgbled(0xffff00)
 
     @staticmethod
     def blink_orange():
@@ -25,3 +25,8 @@ class Led:
     def blink_green():
         pycom.heartbeat(False)
         pycom.rgbled(0x007f00)
+
+    @staticmethod
+    def blink_blue():
+        pycom.heartbeat(False)
+        pycom.rgbled(0x0000FF)

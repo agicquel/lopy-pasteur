@@ -14,10 +14,28 @@ from network import Server
 import ubinascii
 import socket
 from microWebCli import MicroWebCli
+import os
 
 Log.i("LoPy launched")
 Led.blink_red()
 time.sleep(10)
+
+################################# INIT #####################################
+lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:]
+if not config.CONFIGURATION_FILES_DIR in os.listdir():
+    os.mkdir(config.CONFIGURATION_FILES_DIR)
+else:
+    ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'r')
+    try:
+        lopy_ssid = ssid_file.read()
+    except:
+        ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'w+')
+        ssid_file.write(lopy_ssid)
+    ssid_file.close()
+
+Log.i("lopy_ssid = " + lopy_ssid)
+############################################################################
+
 
 ############################ Configure ESP vars ############################
 esp_subscribed = []
@@ -67,7 +85,7 @@ def _lora_callback(trigger):
         messageReceived = True
         socketLora.setblocking(True)
         Log.i("LoRa.RX_PACKET_EVENT")
-        Led.blink_yellow()
+        Led.blink_blue()
         data = socketLora.recv(256)
         socketLora.setblocking(True)
         _callback(data)
@@ -105,13 +123,12 @@ def send(message):
         time.sleep(5)
         attemptCounter = attemptCounter + 1
 
-    Led.blink_orange()
+    Led.blink_green()
     Log.i("Message sent")
 ############################################################################
 
 
 ############################## Configure Wifi ##############################
-lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:]
 wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
 wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 ############################################################################
@@ -214,13 +231,25 @@ def handlerFuncGet(httpClient, httpResponse):
                         };
                         xhr.send();
                     };
+                    function rename() {
+                        var text = document.getElementById("ssid_rename").value;
+                        var xhr = new XMLHttpRequest();
+                        xhr.withCredentials = true;
+                        xhr.addEventListener("readystatechange", function () {
+                        if (this.readyState === 4) {
+                            console.log(this.responseText);
+                        }
+                        });
+                        xhr.open("GET", "http://10.42.31.2/rename/" + text);
+                        xhr.send();
+                    }
                 </script>
         </head>
         <body>
             <h3>Page de configuration du LoPy</h3>
             <br>
             <ul>
-                <li>SSID&nbsp;&nbsp;&nbsp; : """ + lopy_ssid + """</li>
+                <li>SSID&nbsp;&nbsp;&nbsp; : """ + lopy_ssid + """ <input id=\"ssid_rename\" type=\"text\"> <button onclick=\'rename()\'>Rename</button></li>
                 <li>MAC&nbsp;&nbsp;&nbsp; : """ + lopyMAC + """</li>
                 <li>LoRa&nbsp;&nbsp;&nbsp; : """ + ("Connecté" if lopy_connected else "Déconnecté") + """</li>
             </ul> 
@@ -293,11 +322,31 @@ def handlerFuncPost(httpClient, httpResponse, routeArgs):
     else:
         httpResponse.WriteResponseForbidden()
 
+@MicroWebSrv.route('/rename/<ssid>', 'GET')
+def handlerFuncEditSsid(httpClient, httpResponse, routeArgs):
+    global lopy_ssid
+    global wlan
+    lopy_ssid = config.WIFI_SSID_PREFIX + routeArgs["ssid"]
+    Log.i("ssid changed : " + lopy_ssid)
+    httpResponse.WriteResponseOk(
+        headers=None,
+        contentType="text/plain",
+        contentCharset="UTF-8",
+        content="SSID renamed."
+    )
+    ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'w+')
+    try:
+        ssid_file.write(lopy_ssid)
+        ssid_file.close()
+    except:
+        Log.i("Cant save the new ssid")      
+    wlan.deinit()
+    wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
+    wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 
         
 mws = MicroWebSrv() # TCP port 80 and files in /flash/www
 mws.Start(threaded=True)         # Starts server in a new
-
 ############################################################################
 
 
@@ -340,12 +389,6 @@ def removeEsp(espid):
 
 
 ################################ MAIN LOOP #################################
-
-# TEST
-#esp_subscribed.append('600194382C8C')
-#esp_subscribed.append('2C3AE83DE44E')
-#esp_subscribed.append('68C63A88B82B')
-
 _thread.start_new_thread(th_reqEsp, (60, 1337))
 _join()
 while True:
