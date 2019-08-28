@@ -24,13 +24,13 @@ time.sleep(10)
 lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:]
 if not config.CONFIGURATION_FILES_DIR in os.listdir():
     os.mkdir(config.CONFIGURATION_FILES_DIR)
-else:
+try:
     ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'r')
-    try:
-        lopy_ssid = ssid_file.read()
-    except:
-        ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'w+')
-        ssid_file.write(lopy_ssid)
+    lopy_ssid = ssid_file.read()
+    ssid_file.close()
+except:
+    ssid_file = open(config.CONFIGURATION_FILES_DIR + '/ssid', 'w+')
+    ssid_file.write(lopy_ssid)
     ssid_file.close()
 
 Log.i("lopy_ssid = " + lopy_ssid)
