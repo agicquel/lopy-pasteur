@@ -39,8 +39,9 @@ Log.i("lopy_ssid = " + lopy_ssid)
 
 ############################ Configure ESP vars ############################
 esp_subscribed = []
-esp_messages_lora = {}
+esp_subscribed_lora = []
 esp_messages_displayed = {}
+esp_messages_lora = {}
 esp_id_ip = {}
 ############################################################################
 
@@ -51,6 +52,11 @@ lopyMAC = ubinascii.hexlify(lora.mac()).upper().decode('utf-8')
 
 messageReceived = False
 lopy_connected = False
+seq_num = 0
+reqLora = {}
+reqNextLora = {}
+reqLoraInit = {}
+reqLoraInit['s'] = 0
 
 socketLora = socket.socket(socket.AF_LORA, socket.SOCK_RAW)
 socketLora.setsockopt(socket.SOL_LORA, socket.SO_DR, 5)
@@ -63,19 +69,34 @@ app_key = ubinascii.unhexlify(config.LORA_APP_KEY)
 
 def _callback(message):
     Log.i("_callback")
+    global seq_num
+    global esp_messages_lora
+    global esp_messages_displayed
+    global reqLora
+    global reqNextLora
     if(not messageReceived):
         return
     message = message.decode()
     Log.i("message decode = " + message)
     parsed = ujson.loads(message)
-    for m in parsed:
-        mId = str(m.get("espId"))
-        mMes = str(m.get("message"))
-        mName = str(m.get("name"))
-        if mId and mMes :
-            if((not mId in esp_messages_lora) or esp_messages_lora[mId] != mMes):
-                esp_messages_lora[mId] = mMes
-                esp_messages_displayed[mId] = mMes
+    
+    if seq_num == 0 and parsed['s'] != 0:
+        return
+    elif seq_num == 0 and parsed['s'] == 0 :
+        seq_num = seq_num + 1
+    elif parsed['s'] == seq_num:
+        reqLora.clear()
+        seq_num = parsed['s'] + 1
+        reqLora = reqNextLora.copy()
+        reqNextLora.clear()
+        if 'm' in parsed:
+            for m in parsed['m']:
+                mId = str(m.get("id"))
+                mMes = str(m.get("mes"))
+                if mId and mMes :
+                    if((not mId in esp_messages_lora) or esp_messages_lora[mId] != mMes):
+                        esp_messages_lora[mId] = mMes
+                        esp_messages_displayed[mId] = mMes
 
 def _lora_callback(trigger):
     Log.i("_lora_callback")
@@ -118,9 +139,9 @@ def send(message):
     messageReceived = False
     attemptCounter = 0
 
-    while(not messageReceived and attemptCounter < 5):
+    while(not messageReceived and attemptCounter < 3):
         socketLora.send(message.encode())
-        time.sleep(5)
+        time.sleep(15)
         attemptCounter = attemptCounter + 1
 
     Led.blink_green()
@@ -382,8 +403,6 @@ def th_reqEsp(delay, id):
 
 def removeEsp(espid):
     esp_subscribed.remove(espid)
-    esp_messages_lora.pop(espid)
-    esp_messages_displayed.pop(espid)
     esp_id_ip.pop(espid)
 ############################################################################
 
@@ -391,18 +410,49 @@ def removeEsp(espid):
 ################################ MAIN LOOP #################################
 _thread.start_new_thread(th_reqEsp, (60, 1337))
 _join()
+time.sleep(5)
 while True:
-    time.sleep(5)
-    request = {}
-    request["esp_subscribed"] = esp_subscribed
-    request["esp_not_sync"] = []
+    esp_new_discon = []
+    esp_new_con = []
+    modified = False
+    for esp in esp_subscribed_lora:
+        if esp not in esp_subscribed:
+            esp_new_discon.append(esp)
+    for esp in esp_subscribed:
+        if esp not in esp_subscribed_lora:
+            esp_new_con.append(esp)
+    Log.i("esp_subscribed_lora = " + ujson.dumps(esp_subscribed_lora))
+    Log.i("esp_new_discon = " + ujson.dumps(esp_new_discon))
+    Log.i("esp_new_con = " + ujson.dumps(esp_new_con))
+    esp_subscribed_lora = esp_subscribed.copy()
+
+    if len(esp_new_con) != 0:
+        reqNextLora['c'] = esp_new_con
+        modified = True
+    if len(esp_new_discon) != 0:
+        reqNextLora['d'] = esp_new_discon
+        modified = True
+
+    
+    new_lopy_mes = []
     for esp in esp_subscribed:
         if((esp in esp_messages_lora and esp in esp_messages_displayed) and esp_messages_lora[esp] != esp_messages_displayed[esp]):
-            request["esp_not_sync"].append({"espid" : esp, "message" : esp_messages_displayed[esp]})
-    encoded = ujson.dumps(request)
-    Log.i("esp_messages_lora = " + ujson.dumps(esp_messages_lora))
-    Log.i("esp_messages_displayed = " + ujson.dumps(esp_messages_displayed))
-    send(encoded)
+            new_lopy_mes.append({"id" : esp, "mes" : esp_messages_displayed[esp]})
+            esp_messages_lora[esp] = esp_messages_displayed[esp]
+    
+    if(len(new_lopy_mes) != 0):
+        reqNextLora["m"] = new_lopy_mes
+        modified = True
+    
+    #if modified:
+        #seq_num = seq_num + 1
+    
+    reqLora['s'] = seq_num
+
+    if seq_num == 0:
+        send(ujson.dumps(reqLoraInit))
+    else:    
+        send(ujson.dumps(reqLora))
     Led.blink_green()
-    time.sleep(20)
+    time.sleep(60)
 ############################################################################
