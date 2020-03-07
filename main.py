@@ -21,7 +21,7 @@ Led.blink_red()
 time.sleep(10)
 
 ################################# INIT #####################################
-lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac(),':').decode().replace(":","")[-5:]
+lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac()[1],':').decode().replace(":","")[-5:]
 if not config.CONFIGURATION_FILES_DIR in os.listdir():
     os.mkdir(config.CONFIGURATION_FILES_DIR)
 try:
@@ -43,6 +43,7 @@ esp_subscribed_lora = []
 esp_messages_displayed = {}
 esp_messages_lora = {}
 esp_id_ip = {}
+esp_local_changed = []
 ############################################################################
 
 
@@ -57,6 +58,8 @@ reqLora = {}
 reqNextLora = {}
 reqLoraInit = {}
 reqLoraInit['s'] = 0
+
+lora_monitors_ip = []
 
 socketLora = socket.socket(socket.AF_LORA, socket.SOCK_RAW)
 socketLora.setsockopt(socket.SOL_LORA, socket.SO_DR, 5)
@@ -79,6 +82,7 @@ def _callback(message):
     message = message.decode()
     Log.i("message decode = " + message)
     parsed = ujson.loads(message)
+    sendToMonitors(message, "received")
     
     if seq_num == 0 and parsed['s'] != 0:
         return
@@ -93,10 +97,11 @@ def _callback(message):
             for m in parsed['m']:
                 mId = str(m.get("id"))
                 mMes = str(m.get("mes"))
-                if mId and mMes :
+                if mId and mMes and not mId in esp_local_changed:
                     if((not mId in esp_messages_lora) or esp_messages_lora[mId] != mMes):
                         esp_messages_lora[mId] = mMes
                         esp_messages_displayed[mId] = mMes
+        esp_local_changed.clear()
 
 def _lora_callback(trigger):
     Log.i("_lora_callback")
@@ -132,6 +137,7 @@ def _join():
         Log.i("Connected")
         
 def send(message):
+    sendToMonitors(message, "sent")
     Log.i("Sending : " + message)
     global messageReceived
     Led.blink_purple()
@@ -141,7 +147,7 @@ def send(message):
 
     while(not messageReceived and attemptCounter < 3):
         socketLora.send(message.encode())
-        time.sleep(15)
+        time.sleep(20)
         attemptCounter = attemptCounter + 1
 
     Led.blink_green()
@@ -152,6 +158,13 @@ def send(message):
 ############################## Configure Wifi ##############################
 wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
 wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
+
+def _wlan_callback(trigger):
+    Log.i("_wlan_callback")
+    Log.i("trigger type = " + type(trigger))
+    Log.i("trigger = " + trigger)
+
+wlan.callback(trigger=(WLAN.EVENT_PKT_ANY | WLAN.EVENT_PKT_CTRL | WLAN.EVENT_PKT_DATA | WLAN.EVENT_PKT_DATA_AMPDU | WLAN.EVENT_PKT_DATA_MPDU | WLAN.EVENT_PKT_MISC | WLAN.EVENT_PKT_MGMT), handler=_wlan_callback)
 ############################################################################
 
 
@@ -187,6 +200,17 @@ def handlerFuncPost(httpClient, httpResponse):
         )
     else:
         httpResponse.WriteResponseForbidden()
+
+@MicroWebSrv.route('/monitor', 'GET')
+def handlerFuncPostMonitor(httpClient, httpResponse):
+    global lora_monitors_ip
+    lora_monitors_ip.append(httpClient.GetIPAddr())
+    httpResponse.WriteResponseOk(
+            headers=None,
+            contentType="text/plain",
+            contentCharset="UTF-8",
+            content="Monitoring."
+        )
 
 @MicroWebSrv.route('/subscribed/<espid>')
 def handlerFuncSub(httpClient, httpResponse, routeArgs):
@@ -328,11 +352,13 @@ def handlerFuncGetDisplays(httpClient, httpResponse):
 def handlerFuncPost(httpClient, httpResponse, routeArgs):
     global esp_subscribed
     global esp_messages_displayed
+    global esp_local_changed
     params  = httpClient.ReadRequestPostedFormData()
     espid = routeArgs['espid']
     message = params["message"]
     if espid in esp_subscribed:
         esp_messages_displayed[espid] = message;
+        esp_local_changed.append(espid)
         httpResponse.WriteResponseOk(
             headers=None,
             contentType="text/plain",
@@ -370,6 +396,21 @@ mws = MicroWebSrv() # TCP port 80 and files in /flash/www
 mws.Start(threaded=True)         # Starts server in a new
 ############################################################################
 
+############################## MONITORING REQ ##############################
+def sendToMonitors(req:str, typeRequest:str):
+    global lora_monitors_ip
+    for monitor in lora_monitors_ip:
+        wCli = MicroWebCli("http://"+monitor+":6666/lopyrequests", method='POST')
+        try:
+            wCli.OpenRequestFormData(formData={'type' : typeRequest, 'request' : ubinascii.b2a_base64(req)})
+            buf  = memoryview(bytearray(1024))
+            resp = wCli.GetResponse()
+            if not resp.IsSuccess():
+                lora_monitors_ip.remove(monitor)
+        except:
+            lora_monitors_ip.remove(monitor)
+
+############################################################################
 
 ############################### ESP REQ LOOP ###############################
 def th_reqEsp(delay, id):
@@ -377,13 +418,14 @@ def th_reqEsp(delay, id):
     global esp_subscribed
     global esp_messages_lora
     global esp_messages_displayed
+
     while True:
         for espid, espip in esp_id_ip.items():
-            Log.i("Envoie de la req pour espid = " + espid + ", ip = " + espip)
+            Log.i("Envoi de la req pour espid = " + espid + ", ip = " + espip)
             wCli = MicroWebCli("http://"+espip+"/cm")
             wCli.QueryParams['user'] = 'admin'
             wCli.QueryParams['password'] = 'azerty'
-            wCli.QueryParams['cmnd'] = 'Displaytext [z][s2]' + esp_messages_displayed.get(espid)
+            wCli.QueryParams['cmnd'] = 'Displaytext [z][s2]' + str(esp_messages_displayed.get(espid))
             print('GET %s' % wCli.URL)
             try:
                 wCli.OpenRequest()
@@ -408,7 +450,7 @@ def removeEsp(espid):
 
 
 ################################ MAIN LOOP #################################
-_thread.start_new_thread(th_reqEsp, (60, 1337))
+_thread.start_new_thread(th_reqEsp, (20, 1337))
 _join()
 time.sleep(5)
 while True:
