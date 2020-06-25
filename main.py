@@ -21,7 +21,9 @@ Led.blink_red()
 time.sleep(10)
 
 ################################# INIT #####################################
-lopy_ssid = config.WIFI_SSID_PREFIX + ubinascii.hexlify(network.WLAN().mac()[1],':').decode().replace(":","")[-5:]
+lopy_ssid = config.WIFI_SSID_PREFIX + \
+    ubinascii.hexlify(network.WLAN().mac()[
+                      1], ':').decode().replace(":", "")[-5:]
 if not config.CONFIGURATION_FILES_DIR in os.listdir():
     os.mkdir(config.CONFIGURATION_FILES_DIR)
 try:
@@ -70,6 +72,7 @@ socketLora.settimeout(60)
 app_eui = ubinascii.unhexlify(config.LORA_APP_ID)
 app_key = ubinascii.unhexlify(config.LORA_APP_KEY)
 
+
 def _callback(message):
     Log.i("_callback")
     global seq_num
@@ -83,10 +86,10 @@ def _callback(message):
     Log.i("message decode = " + message)
     parsed = ujson.loads(message)
     sendToMonitors(message, "received")
-    
+
     if seq_num == 0 and parsed['s'] != 0:
         return
-    elif seq_num == 0 and parsed['s'] == 0 :
+    elif seq_num == 0 and parsed['s'] == 0:
         seq_num = seq_num + 1
     elif parsed['s'] == seq_num:
         reqLora.clear()
@@ -102,6 +105,7 @@ def _callback(message):
                         esp_messages_lora[mId] = mMes
                         esp_messages_displayed[mId] = mMes
         esp_local_changed.clear()
+
 
 def _lora_callback(trigger):
     Log.i("_lora_callback")
@@ -121,7 +125,10 @@ def _lora_callback(trigger):
         Log.i("LoRa.TX_FAILED_EVENT")
         _join()
 
-lora.callback(trigger=(LoRa.RX_PACKET_EVENT | LoRa.TX_FAILED_EVENT), handler=_lora_callback)
+
+lora.callback(trigger=(LoRa.RX_PACKET_EVENT |
+                       LoRa.TX_FAILED_EVENT), handler=_lora_callback)
+
 
 def _join():
     global lopy_connected
@@ -131,11 +138,12 @@ def _join():
         Led.blink_yellow()
         lora.join(activation=LoRa.OTAA, auth=(app_eui, app_key), timeout=0)
         while not lora.has_joined():
-            time.sleep(2.5)    
+            time.sleep(2.5)
         lopy_connected = True
         Led.blink_green()
         Log.i("Connected")
-        
+
+
 def send(message):
     sendToMonitors(message, "sent")
     Log.i("Sending : " + message)
@@ -156,21 +164,26 @@ def send(message):
 
 
 ############################## Configure Wifi ##############################
-wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
-wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
+wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(
+    WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
+wlan.ifconfig(id=1, config=(config.API_HOST,
+                            '255.255.255.0', '10.42.31.1', '8.8.8.8'))
+
 
 def _wlan_callback(trigger):
     Log.i("_wlan_callback")
     Log.i("trigger type = " + type(trigger))
     Log.i("trigger = " + trigger)
 
-wlan.callback(trigger=(WLAN.EVENT_PKT_ANY | WLAN.EVENT_PKT_CTRL | WLAN.EVENT_PKT_DATA | WLAN.EVENT_PKT_DATA_AMPDU | WLAN.EVENT_PKT_DATA_MPDU | WLAN.EVENT_PKT_MISC | WLAN.EVENT_PKT_MGMT), handler=_wlan_callback)
+
+wlan.callback(trigger=(WLAN.EVENT_PKT_ANY | WLAN.EVENT_PKT_CTRL | WLAN.EVENT_PKT_DATA | WLAN.EVENT_PKT_DATA_AMPDU |
+                       WLAN.EVENT_PKT_DATA_MPDU | WLAN.EVENT_PKT_MISC | WLAN.EVENT_PKT_MGMT), handler=_wlan_callback)
 ############################################################################
 
 
 ######################### Configure FTP and Telnet #########################
 server = network.Server()
-server.deinit() # disable
+server.deinit()  # disable
 ############################################################################
 
 
@@ -183,15 +196,16 @@ def handlerFuncPost(httpClient, httpResponse):
     global esp_messages_lora
     global esp_messages_displayed
     global esp_id_ip
-    params  = httpClient.GetRequestQueryParams()
+    params = httpClient.GetRequestQueryParams()
     if "espid" in params:
         espid = params["espid"]
         Log.i("new sub espId : " + espid)
         if espid not in esp_subscribed:
             esp_subscribed.append(espid)
+        if espid not in esp_messages_displayed:
             esp_messages_lora[espid] = espid
             esp_messages_displayed[espid] = espid
-            esp_id_ip[espid] = httpClient.GetIPAddr()
+        esp_id_ip[espid] = httpClient.GetIPAddr()
         httpResponse.WriteResponseOk(
             headers=None,
             contentType="text/plain",
@@ -201,16 +215,18 @@ def handlerFuncPost(httpClient, httpResponse):
     else:
         httpResponse.WriteResponseForbidden()
 
+
 @MicroWebSrv.route('/monitor', 'GET')
 def handlerFuncPostMonitor(httpClient, httpResponse):
     global lora_monitors_ip
     lora_monitors_ip.append(httpClient.GetIPAddr())
     httpResponse.WriteResponseOk(
-            headers=None,
-            contentType="text/plain",
-            contentCharset="UTF-8",
-            content="Monitoring."
-        )
+        headers=None,
+        contentType="text/plain",
+        contentCharset="UTF-8",
+        content="Monitoring."
+    )
+
 
 @MicroWebSrv.route('/subscribed/<espid>')
 def handlerFuncSub(httpClient, httpResponse, routeArgs):
@@ -236,6 +252,7 @@ def handlerFuncEdit(httpClient, httpResponse, routeArgs):
         )
     else:
         httpResponse.WriteResponseForbidden()
+
 
 @MicroWebSrv.route('/')
 def handlerFuncGet(httpClient, httpResponse):
@@ -310,11 +327,15 @@ def handlerFuncGet(httpClient, httpResponse):
             </thead>
             <tbody>
         """
+
     for espid, espip in esp_id_ip.items():
         response += "<tr><td>" + espid + "</td>"
         response += "<td><a href=\"http://" + espip + "\">" + espip + "</a></td>"
-        response += "<td id='message-" + espid + "'>" + esp_messages_displayed.get(espid) + "</td>"
-        response += "<td><input id=\""+espid+"\" type=\"text\"> <button onclick=\'sendText(\""+espid+"\",\""+espip+"\")\'>Send</button></td></tr>"
+        response += "<td id='message-" + espid + "'>" + \
+            esp_messages_displayed.get(espid) + "</td>"
+        response += "<td><input id=\""+espid + \
+            "\" type=\"text\"> <button onclick=\'sendText(\"" + \
+            espid+"\",\""+espip+"\")\'>Send</button></td></tr>"
     response += """\
                 </tbody>
                 </table>
@@ -322,12 +343,14 @@ def handlerFuncGet(httpClient, httpResponse):
             </body>
         </html>
         """
+
     httpResponse.WriteResponseOk(
-        headers = None,
-        contentType = "text/html",
-        contentCharset = "UTF-8",
-        content = response
+        headers=None,
+        contentType="text/html",
+        contentCharset="UTF-8",
+        content=response
     )
+
 
 @MicroWebSrv.route('/displays', 'GET')
 def handlerFuncGetDisplays(httpClient, httpResponse):
@@ -342,22 +365,23 @@ def handlerFuncGetDisplays(httpClient, httpResponse):
     response += "]"
     Log.i("response = " + response)
     httpResponse.WriteResponseOk(
-        headers = None,
-        contentType = "application/json",
-        contentCharset = "UTF-8",
-        content = response
+        headers=None,
+        contentType="application/json",
+        contentCharset="UTF-8",
+        content=response
     )
+
 
 @MicroWebSrv.route('/displays/<espid>', 'PUT')
 def handlerFuncPost(httpClient, httpResponse, routeArgs):
     global esp_subscribed
     global esp_messages_displayed
     global esp_local_changed
-    params  = httpClient.ReadRequestPostedFormData()
+    params = httpClient.ReadRequestPostedFormData()
     espid = routeArgs['espid']
     message = params["message"]
     if espid in esp_subscribed:
-        esp_messages_displayed[espid] = message;
+        esp_messages_displayed[espid] = message
         esp_local_changed.append(espid)
         httpResponse.WriteResponseOk(
             headers=None,
@@ -368,6 +392,7 @@ def handlerFuncPost(httpClient, httpResponse, routeArgs):
         )
     else:
         httpResponse.WriteResponseForbidden()
+
 
 @MicroWebSrv.route('/rename/<ssid>', 'GET')
 def handlerFuncEditSsid(httpClient, httpResponse, routeArgs):
@@ -386,24 +411,30 @@ def handlerFuncEditSsid(httpClient, httpResponse, routeArgs):
         ssid_file.write(lopy_ssid)
         ssid_file.close()
     except:
-        Log.i("Cant save the new ssid")      
+        Log.i("Cant save the new ssid")
     wlan.deinit()
-    wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
-    wlan.ifconfig(id=1, config=(config.API_HOST, '255.255.255.0', '10.42.31.1', '8.8.8.8'))
+    wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(
+        WLAN.WPA2, config.WIFI_PASS), channel=11, antenna=WLAN.INT_ANT)
+    wlan.ifconfig(id=1, config=(config.API_HOST,
+                                '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 
-        
-mws = MicroWebSrv() # TCP port 80 and files in /flash/www
+
+mws = MicroWebSrv()  # TCP port 80 and files in /flash/www
 mws.Start(threaded=True)         # Starts server in a new
 ############################################################################
 
 ############################## MONITORING REQ ##############################
-def sendToMonitors(req:str, typeRequest:str):
+
+
+def sendToMonitors(req: str, typeRequest: str):
     global lora_monitors_ip
     for monitor in lora_monitors_ip:
-        wCli = MicroWebCli("http://"+monitor+":6666/lopyrequests", method='POST')
+        wCli = MicroWebCli("http://"+monitor +
+                           ":6666/lopyrequests", method='POST')
         try:
-            wCli.OpenRequestFormData(formData={'type' : typeRequest, 'request' : ubinascii.b2a_base64(req)})
-            buf  = memoryview(bytearray(1024))
+            wCli.OpenRequestFormData(
+                formData={'type': typeRequest, 'request': ubinascii.b2a_base64(req)})
+            buf = memoryview(bytearray(1024))
             resp = wCli.GetResponse()
             if not resp.IsSuccess():
                 lora_monitors_ip.remove(monitor)
@@ -413,6 +444,8 @@ def sendToMonitors(req:str, typeRequest:str):
 ############################################################################
 
 ############################### ESP REQ LOOP ###############################
+
+
 def th_reqEsp(delay, id):
     global esp_id_ip
     global esp_subscribed
@@ -423,13 +456,12 @@ def th_reqEsp(delay, id):
         for espid, espip in esp_id_ip.items():
             Log.i("Envoi de la req pour espid = " + espid + ", ip = " + espip)
             wCli = MicroWebCli("http://"+espip+"/cm")
-            wCli.QueryParams['user'] = 'admin'
-            wCli.QueryParams['password'] = 'azerty'
-            wCli.QueryParams['cmnd'] = 'Displaytext [z][s2]' + str(esp_messages_displayed.get(espid))
+            wCli.QueryParams['message'] = str(
+                esp_messages_displayed.get(espid))
             print('GET %s' % wCli.URL)
             try:
                 wCli.OpenRequest()
-                buf  = memoryview(bytearray(1024))
+                buf = memoryview(bytearray(1024))
                 resp = wCli.GetResponse()
                 if resp.IsSuccess():
                     while not resp.IsClosed():
@@ -437,11 +469,13 @@ def th_reqEsp(delay, id):
                         if x < len(buf):
                             buf = buf[:x]
                 else:
-                    print('GET return %d code (%s)' % (resp.GetStatusCode(), resp.GetStatusMessage()))
+                    print('GET return %d code (%s)' %
+                          (resp.GetStatusCode(), resp.GetStatusMessage()))
                     removeEsp(espid)
             except:
                 removeEsp(espid)
         time.sleep(delay)
+
 
 def removeEsp(espid):
     esp_subscribed.remove(espid)
@@ -475,25 +509,25 @@ while True:
         reqNextLora['d'] = esp_new_discon
         modified = True
 
-    
     new_lopy_mes = []
     for esp in esp_subscribed:
         if((esp in esp_messages_lora and esp in esp_messages_displayed) and esp_messages_lora[esp] != esp_messages_displayed[esp]):
-            new_lopy_mes.append({"id" : esp, "mes" : esp_messages_displayed[esp]})
+            new_lopy_mes.append(
+                {"id": esp, "mes": esp_messages_displayed[esp]})
             esp_messages_lora[esp] = esp_messages_displayed[esp]
-    
+
     if(len(new_lopy_mes) != 0):
         reqNextLora["m"] = new_lopy_mes
         modified = True
-    
-    #if modified:
+
+    # if modified:
         #seq_num = seq_num + 1
-    
+
     reqLora['s'] = seq_num
 
     if seq_num == 0:
         send(ujson.dumps(reqLoraInit))
-    else:    
+    else:
         send(ujson.dumps(reqLora))
     Led.blink_green()
     time.sleep(60)
