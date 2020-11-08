@@ -15,6 +15,7 @@ import ubinascii
 import socket
 from microWebCli import MicroWebCli
 import os
+from lora import * 
 
 Log.i("LoPy launched")
 Led.blink_red()
@@ -43,9 +44,7 @@ Log.i("lopy_ssid = " + lopy_ssid)
 esp_subscribed = []
 esp_subscribed_lora = []
 esp_messages_displayed = {}
-esp_messages_lora = {}
 esp_id_ip = {}
-esp_local_changed = []
 ############################################################################
 
 
@@ -55,11 +54,12 @@ lopyMAC = ubinascii.hexlify(lora.mac()).upper().decode('utf-8')
 
 messageReceived = False
 lopy_connected = False
-seq_num = 0
-reqLora = {}
-reqNextLora = {}
-reqLoraInit = {}
-reqLoraInit['s'] = 0
+lora_req_index = 0
+lora_req_queue = []
+lora_req_current = None
+lora_is_fetching = False
+lora_selection = ""
+lora_fetching_data = ""
 
 lora_monitors_ip = []
 
@@ -75,58 +75,104 @@ app_key = ubinascii.unhexlify(config.LORA_APP_KEY)
 
 def _callback(message):
     Log.i("_callback")
-    global seq_num
-    global esp_messages_lora
+    global lora_req_index
     global esp_messages_displayed
-    global reqLora
-    global reqNextLora
-    if(not messageReceived):
-        return
+    global messageReceived
+
     message = message.decode()
-    Log.i("message decode = " + message)
-    parsed = ujson.loads(message)
-    sendToMonitors(message, "received")
+    message = bytes(message, 'utf-8')
+    Log.i("message decode : " + str(message))
+    message = list(message)
+    Log.i("message list : " + str(message))
+    
+    parsed_index = int(message[0])
+    parsed_order = int(message[1]) if len(message) > 1 else config.ORDER_API_EMPTY
 
-    if seq_num == 0 and parsed['s'] != 0:
+    if lora_req_index == 0 and parsed_index != 0:
+        Log.i("callback - 2")
         return
-    elif seq_num == 0 and parsed['s'] == 0:
-        seq_num = seq_num + 1
-    elif parsed['s'] == seq_num:
-        reqLora.clear()
-        seq_num = parsed['s'] + 1
-        reqLora = reqNextLora.copy()
-        reqNextLora.clear()
-        if 'm' in parsed:
-            for m in parsed['m']:
-                mId = str(m.get("id"))
-                mMes = str(m.get("mes"))
-                if mId and mMes and not mId in esp_local_changed:
-                    if((not mId in esp_messages_lora) or esp_messages_lora[mId] != mMes):
-                        esp_messages_lora[mId] = mMes
-                        esp_messages_displayed[mId] = mMes
-        esp_local_changed.clear()
+    elif lora_req_index == parsed_index:
+        messageReceived = True
+        Log.i("callback - 3")
+        
+        if lora_req_index == 0:
+            Log.i("callback - 2")
+            lora_req_index = lora_req_index + 1
+            return
+        
+        lora_req_index = 1 if lora_req_index >= 255 else (lora_req_index + 1)
+        if parsed_order == config.ORDER_API_EMPTY:
+            Log.i("callback : received empty order, nothing to do")
+        else: # parsed_order in config.ORDER_API_FETCHING:
+            _execute_lora_order(message)
+            #lora_fetching_data = message[2::]
+            #Log.i(lora_fetching_data)
+            # if parsed_order in [config.ORDER_DISPLAY_SELECTION[1]]:
+            #     lora_is_fetching = True
+            # elif parsed_order == config.ORDER_API_FETCHING[3]:
+            #     lora_is_fetching = False
 
+def _execute_lora_order(request):
+    global lora_is_fetching
+    global lora_selection
+    global lora_fetching_data
+    global esp_messages_displayed
+    global lora_req_queue
+    order = int(request[1])
+    
+    if order in [config.ORDER_DISPLAY_SELECTION[0], config.ORDER_DISPLAY_MESSAGE[0]]:
+        lora_is_fetching = False
+        lora_fetching_data = ""
+        for i in range(2, len(request)):
+            lora_fetching_data += chr(request[i])
+        Log.i("1/ = " + str(lora_fetching_data))
+    elif order in [config.ORDER_DISPLAY_SELECTION[1], config.ORDER_DISPLAY_MESSAGE[1]]:
+        lora_is_fetching = True
+        lora_fetching_data = ""
+        for i in range(2, len(request)):
+            lora_fetching_data += chr(request[i])
+        Log.i("2/ = " + str(lora_fetching_data))
+    elif order in [config.ORDER_DISPLAY_SELECTION[2], config.ORDER_DISPLAY_MESSAGE[2]]:
+        lora_is_fetching = True
+        for i in range(2, len(request)):
+            lora_fetching_data += chr(request[i])
+        Log.i("3/ = " + str(lora_fetching_data))
+    elif order in [config.ORDER_DISPLAY_SELECTION[2], config.ORDER_DISPLAY_MESSAGE[2]]:
+        lora_is_fetching = False
+        for i in range(2, len(request)):
+            lora_fetching_data += chr(request[i])
+        Log.i("4/ = " + str(lora_fetching_data))
+    
+    if not lora_is_fetching:
+        if order in config.ORDER_DISPLAY_SELECTION:
+            lora_selection = lora_fetching_data
+            lora_is_fetching = True
+        if order in config.ORDER_DISPLAY_MESSAGE:
+            esp_messages_displayed[lora_selection] = lora_fetching_data
+        lora_fetching_data = ""
+    else:
+        lora_req_queue.insert(0, LoraRequest.create_empty_request())
 
 def _lora_callback(trigger):
     Log.i("_lora_callback")
     global messageReceived
     events = lora.events()
     if(events & LoRa.RX_PACKET_EVENT):
-        messageReceived = True
+        #messageReceived = True
         socketLora.setblocking(True)
         Log.i("LoRa.RX_PACKET_EVENT")
         Led.blink_blue()
         data = socketLora.recv(256)
         socketLora.setblocking(True)
         _callback(data)
-    #    if(events & LoRa.TX_PACKET_EVENT):
-    #        Log.i("LoRa.TX_PACKET_EVENT")
+    if(events & LoRa.TX_PACKET_EVENT):
+        Log.i("LoRa.TX_PACKET_EVENT")
     if(events & LoRa.TX_FAILED_EVENT):
         Log.i("LoRa.TX_FAILED_EVENT")
         _join()
 
 
-lora.callback(trigger=(LoRa.RX_PACKET_EVENT |
+lora.callback(trigger=(LoRa.RX_PACKET_EVENT | LoRa.TX_PACKET_EVENT |
                        LoRa.TX_FAILED_EVENT), handler=_lora_callback)
 
 
@@ -137,25 +183,35 @@ def _join():
         lopy_connected = False
         Led.blink_yellow()
         lora.join(activation=LoRa.OTAA, auth=(app_eui, app_key), timeout=0)
+        attempt = 0
         while not lora.has_joined():
             time.sleep(2.5)
+            attempt += 1
+            if attempt % 30 == 0:
+                lora.join(activation=LoRa.OTAA, auth=(app_eui, app_key), timeout=0)
         lopy_connected = True
         Led.blink_green()
         Log.i("Connected")
 
 
 def send(message):
-    sendToMonitors(message, "sent")
-    Log.i("Sending : " + message)
+    message = chr(lora_req_index) + message
+    Log.i("Sending : " + str(bytes(message, 'utf-8')))
     global messageReceived
     Led.blink_purple()
     _join()
     messageReceived = False
     attemptCounter = 0
 
-    while(not messageReceived and attemptCounter < 3):
+    while(not messageReceived): # and attemptCounter < 3
         socketLora.send(message.encode())
-        time.sleep(20)
+        duty_cycle = DutyCycleCalculator.compute_safe_case(spread_factor=lora.sf())
+        Log.i("Duty cycle = " + str(duty_cycle))
+        Log.i("Attempt number " + str(attemptCounter))
+        
+        time.sleep(int(duty_cycle / 1000)*2)
+        ## FOR TEST
+        #time.sleep(300)
         attemptCounter = attemptCounter + 1
 
     Led.blink_green()
@@ -169,12 +225,10 @@ wlan = WLAN(mode=WLAN.AP, ssid=lopy_ssid, auth=(
 wlan.ifconfig(id=1, config=(config.API_HOST,
                             '255.255.255.0', '10.42.31.1', '8.8.8.8'))
 
-
 def _wlan_callback(trigger):
     Log.i("_wlan_callback")
     Log.i("trigger type = " + type(trigger))
     Log.i("trigger = " + trigger)
-
 
 wlan.callback(trigger=(WLAN.EVENT_PKT_ANY | WLAN.EVENT_PKT_CTRL | WLAN.EVENT_PKT_DATA | WLAN.EVENT_PKT_DATA_AMPDU |
                        WLAN.EVENT_PKT_DATA_MPDU | WLAN.EVENT_PKT_MISC | WLAN.EVENT_PKT_MGMT), handler=_wlan_callback)
@@ -186,24 +240,22 @@ server = network.Server()
 server.deinit()  # disable
 ############################################################################
 
-
 ########################## Configure microWebSrv ###########################
 # DOC : https://github.com/jczic/MicroWebSrv
 
 @MicroWebSrv.route('/subscribe', 'POST')
 def handlerFuncPost(httpClient, httpResponse):
     global esp_subscribed
-    global esp_messages_lora
     global esp_messages_displayed
     global esp_id_ip
     params = httpClient.GetRequestQueryParams()
     if "espid" in params:
         espid = params["espid"]
         Log.i("new sub espId : " + espid)
+        lora_req_queue.append(LoraRequest(orders_id=config.ORDER_DISPLAY_CONNECTION, data=("c" + str(espid))))
         if espid not in esp_subscribed:
             esp_subscribed.append(espid)
         if espid not in esp_messages_displayed:
-            esp_messages_lora[espid] = espid
             esp_messages_displayed[espid] = espid
         esp_id_ip[espid] = httpClient.GetIPAddr()
         httpResponse.WriteResponseOk(
@@ -214,19 +266,6 @@ def handlerFuncPost(httpClient, httpResponse):
         )
     else:
         httpResponse.WriteResponseForbidden()
-
-
-@MicroWebSrv.route('/monitor', 'GET')
-def handlerFuncPostMonitor(httpClient, httpResponse):
-    global lora_monitors_ip
-    lora_monitors_ip.append(httpClient.GetIPAddr())
-    httpResponse.WriteResponseOk(
-        headers=None,
-        contentType="text/plain",
-        contentCharset="UTF-8",
-        content="Monitoring."
-    )
-
 
 @MicroWebSrv.route('/subscribed/<espid>')
 def handlerFuncSub(httpClient, httpResponse, routeArgs):
@@ -266,13 +305,11 @@ def handlerFuncGet(httpClient, httpResponse):
                     function updateLopy(espid, message) {
                         var data = "message=" + message;
                         var xhr = new XMLHttpRequest();
-
                         xhr.addEventListener("readystatechange", function () {
                         if (this.readyState === 4) {
                             console.log(this.responseText);
                         }
                         });
-
                         xhr.open("PUT", "http://""" + config.API_HOST + """/displays/" + espid);
                         xhr.withCredentials = true;
                         xhr.send(data);
@@ -376,13 +413,14 @@ def handlerFuncGetDisplays(httpClient, httpResponse):
 def handlerFuncPost(httpClient, httpResponse, routeArgs):
     global esp_subscribed
     global esp_messages_displayed
-    global esp_local_changed
+    global lora_req_queue
     params = httpClient.ReadRequestPostedFormData()
     espid = routeArgs['espid']
     message = params["message"]
     if espid in esp_subscribed:
         esp_messages_displayed[espid] = message
-        esp_local_changed.append(espid)
+        lora_req_queue.append(LoraRequest(orders_id=config.ORDER_DISPLAY_SELECTION, data=(str(espid))))
+        lora_req_queue.append(LoraRequest(orders_id=config.ORDER_DISPLAY_MESSAGE, data=(str(message))))
         httpResponse.WriteResponseOk(
             headers=None,
             contentType="text/plain",
@@ -423,33 +461,11 @@ mws = MicroWebSrv()  # TCP port 80 and files in /flash/www
 mws.Start(threaded=True)         # Starts server in a new
 ############################################################################
 
-############################## MONITORING REQ ##############################
-
-
-def sendToMonitors(req: str, typeRequest: str):
-    global lora_monitors_ip
-    for monitor in lora_monitors_ip:
-        wCli = MicroWebCli("http://"+monitor +
-                           ":6666/lopyrequests", method='POST')
-        try:
-            wCli.OpenRequestFormData(
-                formData={'type': typeRequest, 'request': ubinascii.b2a_base64(req)})
-            buf = memoryview(bytearray(1024))
-            resp = wCli.GetResponse()
-            if not resp.IsSuccess():
-                lora_monitors_ip.remove(monitor)
-        except:
-            lora_monitors_ip.remove(monitor)
-
-############################################################################
-
 ############################### ESP REQ LOOP ###############################
-
 
 def th_reqEsp(delay, id):
     global esp_id_ip
     global esp_subscribed
-    global esp_messages_lora
     global esp_messages_displayed
 
     while True:
@@ -480,55 +496,30 @@ def th_reqEsp(delay, id):
 def removeEsp(espid):
     esp_subscribed.remove(espid)
     esp_id_ip.pop(espid)
+    lora_req_queue.append(LoraRequest(orders_id=config.ORDER_DISPLAY_CONNECTION, data=("d" + str(espid))))
 ############################################################################
 
 
 ################################ MAIN LOOP #################################
 _thread.start_new_thread(th_reqEsp, (20, 1337))
 _join()
-time.sleep(5)
+
+while not lopy_connected:
+    time.sleep(2)
+
 while True:
-    esp_new_discon = []
-    esp_new_con = []
-    modified = False
-    for esp in esp_subscribed_lora:
-        if esp not in esp_subscribed:
-            esp_new_discon.append(esp)
-    for esp in esp_subscribed:
-        if esp not in esp_subscribed_lora:
-            esp_new_con.append(esp)
-    Log.i("esp_subscribed_lora = " + ujson.dumps(esp_subscribed_lora))
-    Log.i("esp_new_discon = " + ujson.dumps(esp_new_discon))
-    Log.i("esp_new_con = " + ujson.dumps(esp_new_con))
-    esp_subscribed_lora = esp_subscribed.copy()
+    if lora_req_current == None:
+        if len(lora_req_queue) == 0:
+            lora_req_queue.append(LoraRequest.create_empty_request())
+        lora_req_current = lora_req_queue.pop(0)
 
-    if len(esp_new_con) != 0:
-        reqNextLora['c'] = esp_new_con
-        modified = True
-    if len(esp_new_discon) != 0:
-        reqNextLora['d'] = esp_new_discon
-        modified = True
+        # FOR TEST
+        #time.sleep(1200)
 
-    new_lopy_mes = []
-    for esp in esp_subscribed:
-        if((esp in esp_messages_lora and esp in esp_messages_displayed) and esp_messages_lora[esp] != esp_messages_displayed[esp]):
-            new_lopy_mes.append(
-                {"id": esp, "mes": esp_messages_displayed[esp]})
-            esp_messages_lora[esp] = esp_messages_displayed[esp]
-
-    if(len(new_lopy_mes) != 0):
-        reqNextLora["m"] = new_lopy_mes
-        modified = True
-
-    # if modified:
-        #seq_num = seq_num + 1
-
-    reqLora['s'] = seq_num
-
-    if seq_num == 0:
-        send(ujson.dumps(reqLoraInit))
+        continue
+    elif lora_req_current.is_finished():
+        lora_req_current = None
+        continue
     else:
-        send(ujson.dumps(reqLora))
-    Led.blink_green()
-    time.sleep(60)
+        send(lora_req_current.pop_payload())
 ############################################################################
